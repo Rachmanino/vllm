@@ -170,7 +170,7 @@ class TileLangMLAImpl(MLACommonImpl[MLACommonMetadata]):
         B = q_nope.shape[0]
         dtype = q_nope.dtype
         device = q_nope.device
-        output_partial = torch.zeros(B,
+        output_partial = torch.empty(B,
                                      self.num_heads,
                                      attn_metadata.decode.num_kv_splits,
                                      self.kv_lora_rank,
