@@ -346,8 +346,8 @@ def tilelang_mla_decode_with_kv_cache(
     dtype: torch.dtype,
     accum_dtype: torch.dtype = "float",
 ):
-    #scale = (1.0 / (dv + dpe))**0.5 * 1.44269504  # log2(e)
+    scale_with_log2 = float(scale * 1.44269504)  # log2(e)
     return mla_decode_tilelang(num_heads_q, num_heads_kv, max_seqlen_pad,
                                v_head_dim, qk_rope_head_dim, BLOCK_N, BLOCK_H,
-                               scale, num_kv_splits, page_block_size, dtype,
+                               scale_with_log2, num_kv_splits, page_block_size, dtype,
                                accum_dtype)
