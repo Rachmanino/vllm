@@ -86,7 +86,7 @@ class TileLangMLAMetadataBuilder(MLACommonMetadataBuilder[TileLangMLAMetadata]
         # heuristics from TileLang's example
         self.num_kv_splits = 1
         BLOCK_N = 64
-        BLOCK_H = self.num_heads // num_heads_kv
+        BLOCK_H = min(64, self.num_heads // num_heads_kv)
 
         max_seqlen = self.model_config.max_model_len
         max_seqlen_pad = math.ceil(max_seqlen / 256) * 256
