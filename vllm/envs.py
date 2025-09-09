@@ -123,6 +123,7 @@ if TYPE_CHECKING:
     VLLM_RANDOMIZE_DP_DUMMY_INPUTS: bool = False
     VLLM_MARLIN_USE_ATOMIC_ADD: bool = False
     VLLM_MXFP4_USE_MARLIN: Optional[bool] = None
+    VLLM_MXFP4_USE_TILELANG: Optional[bool] = None
     VLLM_V0_USE_OUTLINES_CACHE: bool = False
     VLLM_V1_USE_OUTLINES_CACHE: bool = False
     VLLM_TPU_BUCKET_PADDING_GAP: int = 0
@@ -920,6 +921,10 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # Whether to use marlin kernel in mxfp4 quantization method
     "VLLM_MXFP4_USE_MARLIN":
     lambda: maybe_convert_bool(os.environ.get("VLLM_MXFP4_USE_MARLIN", None)),
+
+    # Whether to use tilelang kernel in mxfp4 quantization method
+    "VLLM_MXFP4_USE_TILELANG":
+    lambda: maybe_convert_bool(os.environ.get("VLLM_MXFP4_USE_TILELANG", None)),
 
     # Whether to turn on the outlines cache for V0
     # This cache is unbounded and on disk, so it's not safe to use in
