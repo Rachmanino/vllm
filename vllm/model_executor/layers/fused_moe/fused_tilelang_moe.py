@@ -104,7 +104,7 @@ def fused_tilelang_moe(
     intermediate_cache3 = intermediate_cache13[:M * topk * K]
     intermediate_cache3 = intermediate_cache3.view(-1, K)
 
-    fast_dequant = True
+    fast_dequant = True  # use bits twiddle (requires swizzled quantization)
     with_bias_1 = bias1 is not None
     # TODO: tune these configs further for specific models later
     block_N = 128
@@ -129,7 +129,7 @@ def fused_tilelang_moe(
         split=split,
         fast_dequant=fast_dequant,
         with_bias=with_bias_1)
-    intermediate_cache1 = gemm_kernel_2(
+    intermediate_cache1 = gemm_kernel_1(
         hidden_states,
         w1,
         bias1,
