@@ -129,10 +129,10 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             if not current_platform.has_device_capability(90):
                 # marlin kernel has better performance on ampere
                 return True
-            if not has_triton_kernels():
+            if not has_triton_kernels() and not self._should_use_tilelang():
                 return True
-            if not is_torch_equal_or_newer("2.8.0"):
-                return True
+            # if not is_torch_equal_or_newer("2.8.0"):
+            #     return True
         return False
 
     def _should_use_tilelang(self):
@@ -141,6 +141,8 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             return False
         if not envs.VLLM_MXFP4_USE_TILELANG:
             return False
+        if not has_triton_kernels():
+            return False # Tilelang needs triton-style preprocessing
 
         if self.moe.use_ep:
             raise NotImplementedError(
@@ -184,7 +186,7 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             # In gate_up_proj:
             #    n = 2 * intermediate_size_per_partition_after_pad
             #    k = hidden_size
-            # In down_proj
+            # In down_proj  
             #    n = hidden_size
             #    k = intermediate_size_per_partition_after_pad
             intermediate_size_per_partition_after_pad = round_up(
@@ -203,6 +205,22 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             intermediate_size_per_partition_after_pad = round_up(
                 intermediate_size_per_partition, 256)
             hidden_size = round_up(hidden_size, 256)
+        elif self.use_tilelang:
+            # The moe tilelang kernel requires that for each linear
+            # n % 256 == 0 and k % 128 == 0.
+            # In gate_up_proj:
+            #    n = 2 * intermediate_size_per_partition_after_pad
+            #    k = hidden_size
+            # In down_proj  
+            #    n = hidden_size
+            #    k = intermediate_size_per_partition_after_pad
+            intermediate_size_per_partition_after_pad = round_up(
+                intermediate_size_per_partition, 128)
+            hidden_size = round_up(hidden_size, 256)
+
+            layer.hidden_size = hidden_size
+            layer.intermediate_size_per_partition = \
+                intermediate_size_per_partition_after_pad
         elif current_platform.is_rocm():
             intermediate_size_per_partition_after_pad = round_up(
                 intermediate_size_per_partition, 128)
@@ -287,12 +305,6 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
     def process_weights_after_loading(self, layer):
         if self.use_marlin:
             prepare_moe_fp4_layer_for_marlin(layer)
-        elif self.use_tilelang:
-            logger.warning_once(
-                "Your GPU does not have native support for FP4 computation but "
-                "FP4 quantization is being used. Weight-only FP4 compression "
-                "will be used leveraging the TileLang kernel. This may degrade "
-                "performance for compute-heavy workloads.")
         elif should_use_flashinfer_mxfp4():
             from flashinfer import shuffle_matrix_a, shuffle_matrix_sf_a
             layer.gemm1_alpha = Parameter(torch.tensor(
@@ -415,7 +427,17 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             layer.w2_bias = Parameter(torch.stack(gemm2_bias_shuffled).reshape(
                 self.num_experts, -1),
                                       requires_grad=False)
+
         else:
+            if self.use_tilelang:
+                logger.warning_once(
+                    "Your GPU does not have native support for FP4 computation but "
+                    "FP4 quantization is being used. Weight-only FP4 compression "
+                    "will be used leveraging the TileLang kernel. This may degrade "
+                    "performance for compute-heavy workloads.")
+                # Tilelang mxfp4 grouped gemm also needs triton-style preprocessing
+                
+            print('Start bit-twiddling pre-processing')
             from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig
 
             w13_bias = layer.w13_bias.to(torch.float32)
@@ -450,6 +472,7 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             layer.w13_weight = None
             layer.w2_weight = None
             torch.cuda.empty_cache()
+            print('Finshed bit-twiddling pre-processing')
 
     def _get_tile_tokens_dim(self, x: torch.Tensor, top_k: int):
         # Number of tokens in the input tensor.
@@ -595,6 +618,7 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
                 custom_routing_function=custom_routing_function,
                 scoring_func=scoring_func,
                 e_score_correction_bias=e_score_correction_bias)
+            
             return torch.ops.vllm.fused_tilelang_moe(
                 x,
                 layer.w13_weight,
