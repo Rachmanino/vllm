@@ -427,17 +427,40 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             layer.w2_bias = Parameter(torch.stack(gemm2_bias_shuffled).reshape(
                 self.num_experts, -1),
                                       requires_grad=False)
+        elif self.use_tilelang:
+            logger.warning_once(
+                "Your GPU does not have native support for FP4 computation but "
+                "FP4 quantization is being used. Weight-only FP4 compression "
+                "will be used leveraging the TileLang kernel. This may degrade "
+                "performance for compute-heavy workloads.")
+            # Tilelang mxfp4 grouped gemm also needs triton-style preprocessing
 
+            print('Start tilelang mxfp4 bit-twiddling pre-processing')
+
+            w13_bias = layer.w13_bias.to(torch.float32)
+            w2_bias = layer.w2_bias.to(torch.float32)
+
+            layer.w13_bias = Parameter(w13_bias, requires_grad=False)
+            layer.w2_bias = Parameter(w2_bias, requires_grad=False)
+
+            assert not self.moe.use_ep, "EP is not supported for tilelang mxfp4 moe backend yet."
+
+            # We reuse triton kernels for bit twiddling pre-processing
+            w13_weight, w13_flex, w13_scale = _swizzle_mxfp4(
+                layer.w13_weight, layer.w13_weight_scale, num_warps)
+            w2_weight, w2_flex, w2_scale = _swizzle_mxfp4(
+                layer.w2_weight, layer.w2_weight_scale, num_warps)
+
+            self.w13_weight_triton_tensor = w13_weight
+            self.w2_weight_triton_tensor = w2_weight
+
+            del layer.w13_weight
+            del layer.w2_weight
+            layer.w13_weight = None
+            layer.w2_weight = None
+            torch.cuda.empty_cache()
+            print('Finshed tilelang mxfp4 bit-twiddling pre-processing')
         else:
-            if self.use_tilelang:
-                logger.warning_once(
-                    "Your GPU does not have native support for FP4 computation but "
-                    "FP4 quantization is being used. Weight-only FP4 compression "
-                    "will be used leveraging the TileLang kernel. This may degrade "
-                    "performance for compute-heavy workloads.")
-                # Tilelang mxfp4 grouped gemm also needs triton-style preprocessing
-                
-            print('Start bit-twiddling pre-processing')
             from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig
 
             w13_bias = layer.w13_bias.to(torch.float32)
@@ -472,7 +495,6 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             layer.w13_weight = None
             layer.w2_weight = None
             torch.cuda.empty_cache()
-            print('Finshed bit-twiddling pre-processing')
 
     def _get_tile_tokens_dim(self, x: torch.Tensor, top_k: int):
         # Number of tokens in the input tensor.
